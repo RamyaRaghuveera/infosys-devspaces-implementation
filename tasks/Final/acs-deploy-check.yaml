@@ -1,0 +1,152 @@
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  creationTimestamp: '2023-05-03T08:21:20Z'
+  generation: 35
+  managedFields:
+    - apiVersion: tekton.dev/v1beta1
+      fieldsType: FieldsV1
+      fieldsV1:
+        'f:spec':
+          .: {}
+          'f:description': {}
+          'f:params': {}
+          'f:results': {}
+          'f:steps': {}
+          'f:volumes': {}
+      manager: Mozilla
+      operation: Update
+      time: '2023-04-26T09:33:37Z'
+  name: acs-deploy-check
+  namespace: cicd
+  resourceVersion: '64801261'
+  uid: 9d7a5dbf-61ef-40c4-a79a-cd83f53cb8c9
+spec:
+  description: >-
+    Policy check a deployment with StackRox/RHACS This tasks allows you to check
+    a deployment against build-time policies and apply enforcement to fail
+    builds. It's a companion to the stackrox-image-scan task, which returns full
+    vulnerability scan results for an image.
+  params:
+    - description: |
+        Secret containing the address:port tuple for StackRox Central)
+        (example - rox.stackrox.io:443)
+      name: rox_central_endpoint
+      type: string
+    - description: Secret containing the StackRox API token with CI permissions
+      name: rox_api_token
+      type: string
+    - default: >-
+        https://dev-user:openshift@gitea.apps.cluster-5khxf.5khxf.sandbox2563.opentlc.com/dev-user/securing-software-supply-chain.git
+      name: gitRepositoryUrl
+      type: string
+    - default: main
+      name: gitRepositoryRevision
+      type: string
+    - default: 'true'
+      name: verbose
+      type: string
+    - default: 'false'
+      description: |
+        When set to `"true"`, skip verifying the TLS certs of the Central
+        endpoint.  Defaults to `"false"`.
+      name: insecure-skip-tls-verify
+      type: string
+    - default: globex
+      name: app_name
+      type: string
+  results:
+    - description: Output of `roxctl deployment check`
+      name: check_output
+      type: string
+  steps:
+    - env:
+        - name: GIT_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              key: password
+              name: git-credentials
+              optional: true
+        - name: GIT_USERNAME
+          valueFrom:
+            secretKeyRef:
+              key: username
+              name: git-credentials
+              optional: true
+      image: 'quay.io/redhat-gpte/alpine-git:latest'
+      name: git-checkout
+      resources: {}
+      script: |
+        #!/usr/bin/env sh
+
+        set -eu -o pipefail
+
+        if [[ "$(params.verbose)" == "true" ]] ; then
+          set -x
+        if [[ -n "${GIT_USERNAME}" ]] && [[ -n "${GIT_PASSWORD}" ]]; then
+            git clone "$(echo https://$(params.gitRepositoryUrl) | awk -F '://' '{print $1}')://${GIT_USERNAME}:${GIT_PASSWORD}@$(echo $(params.gitRepositoryUrl) | awk -F '://' '{print $2$1}')" $(pwd)/repository
+        else
+            git clone $(params.gitRepositoryUrl) $(pwd)/repository
+        fi
+        cd repository
+        git checkout "$(params.gitRepositoryRevision)"
+          echo "**** Cloning $(params.gitRepositoryUrl) into $(pwd)/repository"
+          echo "**** Cloning $(params.gitRepositoryUrl) into $(pwd)/repository"
+        fi
+      volumeMounts:
+        - mountPath: /workspace/repository
+          name: repository
+      workingDir: /workspace
+    - env:
+        - name: ROX_API_TOKEN
+          valueFrom:
+            secretKeyRef:
+              key: rox_api_token
+              name: $(params.rox_api_token)
+        - name: ROX_CENTRAL_ENDPOINT
+          valueFrom:
+            secretKeyRef:
+              key: rox_central_endpoint
+              name: $(params.rox_central_endpoint)
+      image: 'registry.access.redhat.com/ubi8/ubi-minimal:latest'
+      name: rox-deploy-scan
+      resources: {}
+      script: >
+        #!/usr/bin/env bash
+
+
+        set +x
+
+        pwd 
+
+        cat README.md
+
+
+        ls
+
+        echo "API Token" $ROX_API_TOKEN
+
+        echo "Endpoint" $ROX_CENTRAL_ENDPOINT
+
+        curl -k -L -H "Authorization: Bearer $ROX_API_TOKEN"
+        https://$ROX_CENTRAL_ENDPOINT/api/cli/download/roxctl-linux --output
+        ./roxctl  > /dev/null; echo "Getting roxctl"
+
+
+
+
+
+        chmod +x ./roxctl  > /dev/null 
+
+
+        ./roxctl deployment check \
+         $( [ "$(params.insecure-skip-tls-verify)" = "true" ] && \
+         echo -n "--insecure-skip-tls-verify") \
+         -e "$ROX_CENTRAL_ENDPOINT" --file "/workspace/repository/gitops/application/globex-ui/base/dep-globex-ui.yaml"
+      volumeMounts:
+        - mountPath: /workspace/repository
+          name: repository
+      workingDir: /workspace/repository
+  volumes:
+    - emptyDir: {}
+      name: repository

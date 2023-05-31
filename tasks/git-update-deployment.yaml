@@ -1,0 +1,193 @@
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: git-update-deployment
+  namespace: cicd
+spec:
+  description: This Task can be used to update image digest in a Git repo using kustomize
+  params:
+    - description: git url to clone
+      name: url
+      type: string
+    - default: ''
+      description: 'git revision to checkout (branch, tag, sha, ref…)'
+      name: revision
+      type: string
+    - default: ''
+      description: (optional) git refspec to fetch before checking out revision
+      name: refspec
+      type: string
+    - default: 'true'
+      description: defines if the resource should initialize and fetch the submodules
+      name: submodules
+      type: string
+    - default: '1'
+      description: >-
+        performs a shallow clone where only the most recent commit(s) will be
+        fetched
+      name: depth
+      type: string
+    - default: 'false'
+      description: >-
+        defines if http.sslVerify should be set to true or false in the global
+        git config
+      name: sslVerify
+      type: string
+    - default: ''
+      description: subdirectory inside the "output" workspace to clone the git repo into
+      name: subdirectory
+      type: string
+    - default: ''
+      description: >-
+        defines which directories patterns to match or exclude when performing a
+        sparse checkout
+      name: sparseCheckoutDirectories
+      type: string
+    - default: 'false'
+      description: >-
+        clean out the contents of the repo's destination directory (if it
+        already exists) before trying to clone the repo there
+      name: deleteExisting
+      type: string
+    - default: ''
+      description: git HTTP proxy server for non-SSL requests
+      name: httpProxy
+      type: string
+    - default: ''
+      description: git HTTPS proxy server for SSL requests
+      name: httpsProxy
+      type: string
+    - default: ''
+      description: git no proxy - opt out of proxying HTTP/HTTPS requests
+      name: noProxy
+      type: string
+    - name: KUSTOMIZATION_PATH
+      type: string
+    - default: 'true'
+      description: log the commands used during execution
+      name: verbose
+      type: string
+    - default: >-
+        registry.redhat.io/openshift-pipelines/pipelines-git-init-rhel8@sha256:cadf614a6044ee37397de3abe7674827ecab225e7fac9fb123eff5473e2c4003
+      description: the image used where the git-init binary is
+      name: gitInitImage
+      type: string
+    - name: CURRENT_IMAGE
+      type: string
+    - name: NEW_IMAGE
+      type: string
+    - name: IMAGE_TAG
+      type: string
+    - name: USER_EMAIL
+      type: string
+    - name: USER_NAME
+      type: string
+  results:
+    - description: The commit SHA
+      name: commitSHA
+      type: string
+  steps:
+    - env:
+        - name: HOME
+          value: /tekton/home
+        - name: GIT_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              key: password
+              name: git-credentials
+              optional: true
+        - name: GIT_USERNAME
+          valueFrom:
+            secretKeyRef:
+              key: username
+              name: git-credentials
+              optional: true
+      image: 'quay.io/redhat-gpte/alpine-git:latest'
+      name: clone
+      resources: {}
+      script: >
+        #!/bin/sh
+
+        set -eu -o pipefail
+
+        if [[ "$(params.deleteExisting)" == "true" ]] ; then  #deleteExisting=false
+          cleandir
+        fi
+        if [[ -n "${GIT_USERNAME}" ]] && [[ -n "${GIT_PASSWORD}" ]]; then
+            git clone "$(echo https://$(params.url) | awk -F '://' '{print $1}')://${GIT_USERNAME}:${GIT_PASSWORD}@$(echo $(params.url) | awk -F '://' '{print $2$1}')" $(workspaces.output.path)/repository
+        else
+            git clone $(params.url) $(workspaces.output.path)/repository
+        fi
+
+
+        #cd "$CHECKOUT_DIR"
+
+        pwd
+
+        ls
+
+        RESULT_SHA="$(git rev-parse HEAD)"
+
+        EXIT_CODE="$?"
+
+        if [ "$EXIT_CODE" != 0 ] ; then
+          exit $EXIT_CODE
+        fi
+    - env:
+        - name: HOME
+          value: /tekton/home
+      image: 'k8s.gcr.io/kustomize/kustomize:v3.8.7'
+      name: update-digest
+      resources: {}
+      script: >
+
+
+        cd $(workspaces.output.path)/repository/$(params.subdirectory)/$(params.KUSTOMIZATION_PATH)
+        #$(workspaces.output.path)/$(params.subdirectory)/$(params.KUSTOMIZATION_PATH)
+
+        ls
+
+        kustomize edit set image
+        $(params.CURRENT_IMAGE)=$(params.NEW_IMAGE):$(params.IMAGE_TAG)
+
+        echo "##########################"
+
+        echo "### kustomization.yaml ###"
+
+        echo "##########################"
+
+        cat kustomization.yaml
+      workingDir: $(workspaces.output.path)
+    - env:
+        - name: HOME
+          value: /tekton/home
+      image: $(params.gitInitImage)
+      name: git-commit
+      resources: {}
+      script: |
+        CHECKOUT_DIR="$(workspaces.output.path)/$(params.subdirectory)"
+        cd $CHECKOUT_DIR
+
+        git config user.email $(params.USER_EMAIL)
+        git config user.name $(params.USER_NAME)
+
+
+
+        git status
+        git add $(params.KUSTOMIZATION_PATH)/kustomization.yaml
+        git commit -m "Image version updated [$(params.CURRENT_IMAGE)]"
+
+
+
+        git push origin HEAD:$(params.revision)
+        RESULT_SHA="$(git rev-parse HEAD | tr -d '\n')"
+        EXIT_CODE="$?"
+        if [ "$EXIT_CODE" != 0 ]
+        then
+          exit $EXIT_CODE
+        fi
+        # Make sure we don't add a trailing newline to the result!
+        echo -n "$RESULT_SHA" > $(results.commitSHA.path)
+  workspaces:
+    - description: The git repo will be cloned onto the volume backing this workspace
+      name: output

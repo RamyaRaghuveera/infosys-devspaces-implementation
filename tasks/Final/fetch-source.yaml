@@ -1,0 +1,74 @@
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  creationTimestamp: '2023-05-03T14:42:16Z'
+  generation: 1
+  managedFields:
+    - apiVersion: tekton.dev/v1beta1
+      fieldsType: FieldsV1
+      fieldsV1:
+        'f:spec':
+          .: {}
+          'f:params': {}
+          'f:results': {}
+          'f:steps': {}
+          'f:volumes': {}
+      manager: Mozilla
+      operation: Update
+      time: '2023-05-03T14:42:16Z'
+  name: fetch-source
+  namespace: cicd
+  resourceVersion: '2350062'
+  uid: b7e98326-a918-4cc1-95b3-172876237628
+spec:
+  params:
+    - description: The url for the git repository
+      name: git-url
+      type: string
+    - default: master
+      description: 'The git revision (branch, tag, or sha) that should be built'
+      name: git-revision
+      type: string
+    - default: /source
+      name: source-dir
+      type: string
+  results:
+    - name: git-url
+      type: string
+    - name: git-revision
+      type: string
+    - name: source-dir
+      type: string
+  steps:
+    - env:
+        - name: NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: GIT_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              key: password
+              name: git-credentials
+              optional: true
+        - name: GIT_USERNAME
+          valueFrom:
+            secretKeyRef:
+              key: username
+              name: git-credentials
+              optional: true
+      image: quay.io/ibmgaragecloud/alpine-git
+      name: git-clone
+      resources: {}
+      script: |
+        set +x
+        if [[ -n "${GIT_USERNAME}" ]] && [[ -n "${GIT_PASSWORD}" ]]; then
+            git clone "$(echo $(params.git-url) | awk -F '://' '{print $1}')://${GIT_USERNAME}:${GIT_PASSWORD}@$(echo $(params.git-url) | awk -F '://' '{print $2}')" $(params.source-dir)
+        else
+            git clone $(params.git-url) $(params.source-dir)
+        fi
+        cd $(params.source-dir)
+        git checkout $(params.git-revision)
+  volumes:
+    - emptyDir: {}
+      name: source

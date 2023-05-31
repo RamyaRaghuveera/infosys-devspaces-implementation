@@ -1,0 +1,219 @@
+apiVersion: tekton.dev/v1beta1
+kind: Pipeline
+metadata:
+  creationTimestamp: '2023-05-04T13:30:10Z'
+  generation: 25
+  managedFields:
+    - apiVersion: tekton.dev/v1beta1
+      fieldsType: FieldsV1
+      fieldsV1:
+        'f:spec':
+          .: {}
+          'f:params': {}
+          'f:resources': {}
+          'f:tasks': {}
+          'f:workspaces': {}
+      manager: Mozilla
+      operation: Update
+      time: '2023-05-04T16:57:47Z'
+  name: appln-pipeline
+  namespace: cicd
+  resourceVersion: '56006397'
+  uid: 63ac0627-11d2-43ee-8d5d-a73d3227cbce
+spec:
+  params:
+    - default: 'false'
+      name: TLSVERIFY
+      type: string
+    - name: BUILD_EXTRA_ARGS
+      type: string
+    - default: >-
+        image-registry.openshift-image-registry.svc:5000/$(context.pipelineRun.namespace)/globex-ui
+      name: IMAGE_REPO
+      type: string
+    - default: 'https://github.com/RamyaRaghuveera/globex-ui.git'
+      name: GIT_REPO
+      type: string
+    - default: >-
+        https://sonarqube-sonarqube.apps.cluster-4t99p.4t99p.sandbox2243.opentlc.com
+      name: SONARQUBE_HOST_URL
+      type: string
+    - name: SONARQUBE_PROJECT_KEY
+      type: string
+    - name: SONARQUBE_PROJECT_SECRET
+      type: string
+    - default: ramyarbhat2910@gmail.com
+      name: USER_EMAIL
+      type: string
+    - default: ramragh1
+      name: USER_NAME
+      type: string
+    - default: latest
+      name: IMAGE_TAG
+      type: string
+    - default: globex-ui
+      name: APP_NAME
+      type: string
+    - default: 'http://148.64.4.164:8080'
+      name: HTTP_PROXY
+      type: string
+    - default: >-
+        10.191.48.101,localhost,bastion.mgmt.infyitapps.local,api.cloud.infyitapps.local,image-registry.openshift-image-registry.svc,.apps.cloud.infyitapps.local
+      name: NO_PROXY
+      type: string
+    - default: github.com/RamyaRaghuveera/Ocp-HelmChart.git
+      name: HELM_REPO
+      type: string
+    - default: main
+      name: GIT_REVISION
+      type: string
+    - default: rrbg.jfrog.io/docker-local
+      name: JFROG_URL
+      type: string
+    - default: 'image-registry.openshift-image-registry.svc:5000/cicd/globex-ui'
+      name: IMAGE_NAME
+      type: string
+  tasks:
+    - name: fetch-source
+      params:
+        - name: url
+          value: $(params.GIT_REPO)
+        - name: revision
+          value: $(params.GIT_REVISION)
+        - name: deleteExisting
+          value: 'true'
+      taskRef:
+        kind: ClusterTask
+        name: git-clone
+      workspaces:
+        - name: output
+          workspace: shared-data
+    - name: scan-source
+      params:
+        - name: sonarqubeHostUrl
+          value: $(params.SONARQUBE_HOST_URL)
+        - name: git-url
+          value: $(params.GIT_REPO)
+        - name: git-revision
+          value: $(params.GIT_REVISION)
+        - name: app-name
+          value: $(params.APP_NAME)
+      runAfter:
+        - fetch-source
+      taskRef:
+        kind: Task
+        name: scan-code
+    - name: build-image
+      params:
+        - name: TLSVERIFY
+          value: $(params.TLSVERIFY)
+        - name: BUILD_EXTRA_ARGS
+          value: '--ulimit=nofile=4096:4096'
+        - name: IMAGE
+          value: '$(params.IMAGE_REPO):$(params.IMAGE_TAG)'
+      retries: 1
+      runAfter:
+        - scan-source
+      taskRef:
+        kind: ClusterTask
+        name: buildah
+      workspaces:
+        - name: source
+          workspace: shared-data
+    - name: acs-image-check
+      params:
+        - name: rox_central_endpoint
+          value: stackrox-endpoint
+        - name: rox_api_token
+          value: stackrox-secret
+        - name: image
+          value: '$(params.IMAGE_REPO):$(params.IMAGE_TAG)'
+        - name: insecure-skip-tls-verify
+          value: 'true'
+      runAfter:
+        - build-image
+      taskRef:
+        kind: Task
+        name: acs-image-check
+    - name: acs-image-scan
+      params:
+        - name: rox_central_endpoint
+          value: stackrox-endpoint
+        - name: rox_api_token
+          value: stackrox-secret
+        - name: image
+          value: '$(params.IMAGE_REPO):$(params.IMAGE_TAG)'
+        - name: insecure-skip-tls-verify
+          value: 'true'
+      runAfter:
+        - build-image
+      taskRef:
+        kind: Task
+        name: acs-image-scan
+    - name: acs-deploy-check
+      params:
+        - name: rox_central_endpoint
+          value: stackrox-endpoint
+        - name: rox_api_token
+          value: stackrox-secret
+        - name: gitRepositoryUrl
+          value: $(params.HELM_REPO)
+        - name: gitRepositoryRevision
+          value: main
+        - name: insecure-skip-tls-verify
+          value: 'true'
+        - name: app_name
+          value: $(params.APP_NAME)
+      runAfter:
+        - acs-image-scan
+        - acs-image-check
+      taskRef:
+        kind: Task
+        name: acs-deploy-check
+    - name: git-update-deployment
+      params:
+        - name: url
+          value: $(params.HELM_REPO)
+        - name: revision
+          value: main
+        - name: submodules
+          value: 'true'
+        - name: depth
+          value: '1'
+        - name: sslVerify
+          value: 'true'
+        - name: subdirectory
+          value: gitops
+        - name: deleteExisting
+          value: 'true'
+        - name: httpProxy
+          value: $(params.HTTP_PROXY)
+        - name: httpsProxy
+          value: $(params.HTTP_PROXY)
+        - name: KUSTOMIZATION_PATH
+          value: application/globex-ui/base
+        - name: verbose
+          value: 'true'
+        - name: gitInitImage
+          value: >-
+            registry.redhat.io/openshift-pipelines/pipelines-git-init-rhel8@sha256:cadf614a6044ee37397de3abe7674827ecab225e7fac9fb123eff5473e2c4003
+        - name: CURRENT_IMAGE
+          value: 'image-registry.openshift-image-registry.svc:5000/cicd/globex-ui'
+        - name: NEW_IMAGE
+          value: 'image-registry.openshift-image-registry.svc:5000/cicd/globex-ui'
+        - name: IMAGE_TAG
+          value: $(params.IMAGE_TAG)
+        - name: USER_EMAIL
+          value: $(params.USER_EMAIL)
+        - name: USER_NAME
+          value: $(params.USER_NAME)
+      runAfter:
+        - acs-deploy-check
+      taskRef:
+        kind: Task
+        name: git-update-deployment
+      workspaces:
+        - name: output
+          workspace: shared-data
+  workspaces:
+    - name: shared-data
